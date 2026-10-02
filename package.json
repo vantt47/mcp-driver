@@ -1,0 +1,42 @@
+{
+  "name": "mcp-gdrive",
+  "version": "1.0.0",
+  "description": "MCP server for Google Drive — search / read / create / update",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-gdrive": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "auth": "npm run build && node dist/scripts/authorize.js",
+    "start": "node dist/index.js",
+    "dev": "npm run build && node dist/index.js",
+    "inspector": "npm run build && npx -y @modelcontextprotocol/inspector node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "google-auth-library": "^10.5.0",
+    "googleapis": "^178.0.0",
+    "open": "^10.1.0",
+    "zod": "^3.25.76"
+  },
+  "overrides": {
+    "google-auth-library": "$google-auth-library"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
