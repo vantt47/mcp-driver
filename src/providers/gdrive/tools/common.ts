@@ -1,5 +1,7 @@
 import { Readable } from "node:stream";
 import { Config } from "../config.js";
+import { assertWritable as assertGlobalWritable } from "../../../core/env.js";
+import { ToolResult, safeHandler as coreSafeHandler, textResult } from "../../../core/result.js";
 import { Drive, DriveFile, FILE_FIELDS, explainDriveError, normalizeFileId } from "../drive.js";
 
 export interface ToolContext {
@@ -8,46 +10,16 @@ export interface ToolContext {
   drive: () => Drive;
 }
 
-/** Kết quả trả về cho MCP (content blocks). */
-export type ToolResult = {
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "image"; data: string; mimeType: string }
-  >;
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-};
+export type { ToolResult };
+export { textResult };
 
-export function textResult(text: string, structured?: Record<string, unknown>): ToolResult {
-  return structured
-    ? { content: [{ type: "text", text }], structuredContent: structured }
-    : { content: [{ type: "text", text }] };
-}
-
-export function errorResult(err: unknown): ToolResult {
-  return {
-    content: [{ type: "text", text: `❌ ${explainDriveError(err)}` }],
-    isError: true,
-  };
-}
-
-/** Bọc handler để mọi lỗi đều trả về dạng isError thay vì làm sập server. */
+/** Bọc handler để mọi lỗi đều trả về dạng isError (diễn giải theo ngữ cảnh Drive). */
 export function safeHandler<A>(fn: (args: A) => Promise<ToolResult>) {
-  return async (args: A): Promise<ToolResult> => {
-    try {
-      return await fn(args);
-    } catch (err) {
-      return errorResult(err);
-    }
-  };
+  return coreSafeHandler(fn, explainDriveError);
 }
 
 export function assertWritable(config: Config): void {
-  if (config.readOnly) {
-    throw new Error(
-      "Server đang chạy ở chế độ chỉ-đọc (GDRIVE_READ_ONLY=true). Không thể tạo/sửa file.",
-    );
-  }
+  assertGlobalWritable(config.readOnly, "GDRIVE_READ_ONLY");
 }
 
 export async function getMetadata(drive: Drive, fileId: string): Promise<DriveFile> {

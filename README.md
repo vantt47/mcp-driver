@@ -1,27 +1,128 @@
-# mcp-gdrive — MCP server cho Google Drive
+# mcp-platform — MCP server setup key/config đa nền tảng
 
-MCP server viết bằng **TypeScript / Node.js**, cho phép Claude (hoặc bất kỳ MCP client nào) làm việc trực tiếp với Google Drive của bạn qua 4 tool:
+MCP server (TypeScript / Node.js) để Claude tự setup key và config khi làm các tính năng như **Google Sign-In, push FCM, Sign in with Apple, DNS, CI secrets**. Không còn phải mở từng console để copy key bằng tay.
 
-| Tool | Chức năng |
+| Provider | Tool | Làm được gì |
+|---|---|---|
+| `platform` (luôn bật) | `platform_status`, `platform_setup_guide`, `secret_store` | Xem credential, đọc quy trình chuẩn, ghi 1 secret vào nhiều nơi |
+| `gcp` | `gcp_list_projects`, `gcp_enable_apis`, `gcp_list_enabled_apis`, `gcp_create_service_account`, `gcp_create_service_account_key`, `gcp_secret_list`, `gcp_secret_copy` | Bật API, service account + role, key JSON, Secret Manager |
+| `firebase` | `firebase_list_projects`, `firebase_add_to_project`, `firebase_list_apps`, `firebase_create_app`, `firebase_get_sdk_config`, `firebase_android_sha`, `firebase_auth_get_config`, `firebase_auth_enable_google`, `firebase_auth_authorized_domains`, `fcm_send` | Đăng ký app, tải `google-services.json` / `GoogleService-Info.plist` / config web, SHA Android, bật Google Sign-In, gửi push thử |
+| `cloudflare` | `cf_list_zones`, `cf_list_dns`, `cf_upsert_dns`, `cf_delete_dns`, `cf_list_tunnels` | DNS và Tunnel (mặc định không ghi đè record đã có) |
+| `github` | `github_list_secrets`, `github_set_secret`, `github_set_variable` | Secret và variable của GitHub Actions (repo hoặc environment) |
+| `apple` | `apple_list_bundle_ids`, `apple_create_bundle_id`, `apple_bundle_capabilities` | App ID, bật Push Notifications, Sign in with Apple… |
+| `gdrive` | `gdrive_search`, `gdrive_read`, `gdrive_create`, `gdrive_update` | Google Drive (giữ nguyên như bản cũ) |
+
+### Nguyên tắc an toàn
+
+- **Secret không đi qua chat.** Key service account, client secret, file `.p8`… được ghi thẳng vào *destinations*: `dotenv` (upsert biến), `file`, `gcp_secret` (Secret Manager), `github_secret`. Output chỉ báo đã ghi vào đâu.
+- Ghi file trong git repo mà file đó chưa được `.gitignore` thì tool sẽ cảnh báo.
+- `cf_upsert_dns` không ghi đè record có sẵn nếu không có `overwrite=true`. Ghi file cũng cần `overwrite=true`.
+- `MCP_READ_ONLY=true` chặn mọi thao tác ghi. `MCP_PROVIDERS` chỉ bật những provider cần.
+
+### Phần vẫn phải làm tay (không có API công khai)
+
+Mỗi project hoặc môi trường chỉ cần làm một lần. `platform_setup_guide` đánh dấu các bước này bằng 🖐:
+
+- OAuth consent screen và OAuth client loại **Web** cho Google Sign-In. Mẹo: bật Google trong Firebase Console → Authentication để Firebase tự tạo Web client. Client Android và iOS được Firebase tự tạo sau khi đăng ký app và thêm SHA.
+- APNs Auth Key (`.p8`) và việc upload nó lên Firebase Cloud Messaging.
+- Web Push certificate (VAPID key) của FCM web.
+- Services ID và key cho Sign in with Apple trên web/Android.
+
+---
+
+## 1. Cài đặt
+
+```bash
+npm install          # tự build (script "prepare")
+cp .env.example .env # điền những provider cần dùng
+npm run check        # xem provider nào đã có credential
+```
+
+Yêu cầu Node.js 18 trở lên.
+
+## 2. Credential cho từng provider
+
+| Provider | Cần gì |
 |---|---|
-| `gdrive_search` | Tìm file/folder theo từ khoá full-text, tên, loại, folder cha, thời gian sửa |
-| `gdrive_read` | Đọc nội dung file — tự động export Google Docs→Markdown, Sheets→CSV, Slides→text |
-| `gdrive_create` | Tạo file thường, folder, hoặc Google Docs/Sheets/Slides (convert từ Markdown/CSV) |
-| `gdrive_update` | Ghi đè / nối thêm nội dung, đổi tên, di chuyển folder, gắn sao, vào/ra Thùng rác |
+| gcp, firebase | ADC: `gcloud auth application-default login` (tick đủ mọi quyền ở trang consent). Hoặc `GOOGLE_APPLICATION_CREDENTIALS=<service-account.json>`. Mỗi lệnh gọi tự tính hạn mức (`x-goog-user-project`) vào chính project đang thao tác, nên **không cần** quota project chung. Tuỳ chọn: `GCP_PROJECT_ID` (project mặc định), `GCP_QUOTA_PROJECT` (ép một quota project cố định). Tài khoản cần quyền Owner/Editor, hoặc tối thiểu Firebase Admin + Service Account Admin + Secret Manager Admin + Service Usage Admin. |
+| cloudflare | `CLOUDFLARE_API_TOKEN` (DNS edit; thêm quyền Tunnel read nếu dùng `cf_list_tunnels`), tuỳ chọn `CLOUDFLARE_ACCOUNT_ID` |
+| github | `GITHUB_TOKEN` (fine-grained: *Secrets* + *Variables* read/write) hoặc `GITHUB_CLASSIC_TOKEN` |
+| apple | `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY_PATH` (file `.p8` của App Store Connect API key, role Admin hoặc App Manager) |
+| gdrive | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (OAuth Desktop app), sau đó chạy `npm run auth` (xem mục 6) |
 
-Xác thực bằng **OAuth 2.0 Desktop flow + PKCE**, refresh token lưu trên máy, tự động làm mới access token.
+Trên Windows, nếu process MCP không thấy một biến (ví dụ VS Code mở trước khi bạn `setx`), server tự đọc biến đó từ biến môi trường **User** (`HKCU\Environment`).
 
----
+## 3. Thêm vào Claude
 
-## 1. Yêu cầu
+**Claude Code** (cấp user, dùng cho mọi dự án):
 
-- Node.js >= 18 (khuyến nghị 20+)
-- Một Google account có Drive
-- Google Cloud project (miễn phí)
+```bash
+claude mcp add platform -s user -- node D:/DMST/mcp-driver/dist/index.js
+```
 
----
+**Claude Desktop** (`%APPDATA%\Claude\claude_desktop_config.json`):
 
-## 2. Tạo OAuth Client trên Google Cloud
+```json
+{
+  "mcpServers": {
+    "platform": {
+      "command": "node",
+      "args": ["D:\\DMST\\mcp-driver\\dist\\index.js"],
+      "env": { "MCP_PROVIDERS": "gcp,firebase,cloudflare,github,apple,gdrive" }
+    }
+  }
+}
+```
+
+Test không cần Claude: `npm run inspector`.
+
+## 4. Ví dụ sử dụng
+
+> "Setup push FCM cho app Flutter `vn.dmst.shop` trên project `shop-stg`: Android + iOS, backend NestJS ở repo `vantt47/shop-api`."
+
+Claude sẽ: gọi `platform_setup_guide flow=fcm_android` và `fcm_ios`, rồi `gcp_enable_apis [fcm]`, `firebase_create_app` (android, ios), `firebase_get_sdk_config write_to=…/google-services.json` và `…/GoogleService-Info.plist`, `apple_bundle_capabilities enable=[PUSH_NOTIFICATIONS]`, `gcp_create_service_account fcm-sender roles=[firebasecloudmessaging.admin]`, `gcp_create_service_account_key destinations=[gcp_secret, github_secret repo=vantt47/shop-api]`. Cuối cùng Claude nhắc bạn bước 🖐 upload APNs key.
+
+Ví dụ `destinations`:
+
+```json
+[
+  { "type": "dotenv", "path": "D:/proj/api/.env", "key": "FIREBASE_SERVICE_ACCOUNT" },
+  { "type": "file", "path": "D:/proj/api/secrets/fcm.json", "overwrite": true },
+  { "type": "gcp_secret", "project_id": "shop-stg" },
+  { "type": "github_secret", "repo": "vantt47/shop-api", "environment": "staging" }
+]
+```
+
+Các flow có trong `platform_setup_guide`: `google_signin_web`, `google_signin_android`, `google_signin_ios`, `apple_signin`, `fcm_android`, `fcm_ios`, `fcm_web`, `fcm_server`, `google_api_backend`.
+
+## 5. Cấu trúc mã nguồn
+
+```
+src/
+├── index.ts                 # Khởi tạo McpServer, chọn provider theo MCP_PROVIDERS, --check/--auth
+├── core/
+│   ├── env.ts               # Nạp .env, readEnv (fallback registry Windows), MCP_READ_ONLY
+│   ├── result.ts            # ToolResult, safeHandler, explainError, waitOperation, log (stderr)
+│   ├── http.ts              # fetchJson cho REST API (Cloudflare, GitHub, Apple)
+│   ├── sinks.ts             # destinations: dotenv / file / gcp_secret / github_secret
+│   └── provider.ts          # Interface Provider
+└── providers/
+    ├── platform/            # platform_status, platform_setup_guide, secret_store
+    ├── gcp/                 # ADC client, Secret Manager, tool gcp_*
+    ├── firebase/            # firebase_*, fcm_send
+    ├── cloudflare/          # cf_*
+    ├── github/              # client (mã hoá sealed box bằng libsodium), github_*
+    ├── apple/               # JWT ES256 + App Store Connect, apple_*
+    └── gdrive/              # Code Drive cũ: auth OAuth PKCE, tools/, authorize.ts
+```
+
+Thêm provider mới: tạo `src/providers/<id>/index.ts` export một `Provider` (`id`, `title`, `instructions`, `status()`, `register(server)`), rồi thêm vào mảng `ALL` trong `src/index.ts`.
+
+MCP dùng **stdout** cho JSON-RPC, nên mọi log phải ghi ra **stderr** (dùng `log()` trong `core/result.ts`). Không dùng `console.log()` trong luồng server.
+
+## 6. Provider Google Drive
+
+### Tạo OAuth Client (Desktop app)
 
 1. Vào <https://console.cloud.google.com/> → tạo project mới (hoặc chọn project có sẵn).
 2. **APIs & Services → Library** → tìm **Google Drive API** → **Enable**.
@@ -39,132 +140,29 @@ Xác thực bằng **OAuth 2.0 Desktop flow + PKCE**, refresh token lưu trên m
 
 ---
 
-## 3. Cài đặt
+
+### Đăng nhập (một lần)
 
 ```bash
-# giải nén / clone rồi:
-cd mcp-gdrive
-npm install          # tự động build luôn (script "prepare")
-cp .env.example .env
+npm run auth             # mở trình duyệt, lưu refresh token vào ~/.mcp-gdrive/token.json
+npm run auth -- --force  # đăng nhập lại bằng tài khoản khác
 ```
 
-Mở `.env` và điền:
+### Biến môi trường
 
-```dotenv
-GOOGLE_CLIENT_ID=xxxxxxxxxxxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxx
-```
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | OAuth client (Desktop app). Có thể dùng tên `GDRIVE_CLIENT_ID` / `GDRIVE_CLIENT_SECRET` |
+| `GDRIVE_TOKEN_PATH` | `~/.mcp-gdrive/token.json` | Nơi lưu refresh token |
+| `GDRIVE_OAUTH_PORT` | `0` (tự chọn) | Cổng loopback cho OAuth callback |
+| `GDRIVE_SCOPES` | `.../auth/drive` | `.../auth/drive.readonly` nếu chỉ cần đọc |
+| `GDRIVE_ROOT_FOLDER_ID` | — | Giới hạn search/create trong một cây folder |
+| `GDRIVE_READ_ONLY` | `false` | Chặn `create`/`update` của Drive |
+| `GDRIVE_MAX_READ_BYTES` | `1000000` | Giới hạn byte mỗi lần `gdrive_read` |
 
----
+### Tham chiếu tool
 
-## 4. Đăng nhập Google (một lần duy nhất)
-
-```bash
-npm run auth
-```
-
-Lệnh này sẽ:
-
-1. Mở trình duyệt tới màn hình cấp quyền của Google.
-2. Nhận authorization code qua một HTTP server loopback tạm thời (`http://localhost:<port>/oauth2callback`).
-3. Đổi code lấy **refresh token** và lưu vào `~/.mcp-gdrive/token.json` (quyền `0600`).
-4. Gọi thử Drive API và in ra tên tài khoản + 3 file sửa gần nhất để xác nhận.
-
-Đăng nhập lại bằng tài khoản khác:
-
-```bash
-npm run auth -- --force
-```
-
-Kiểm tra trạng thái bất cứ lúc nào:
-
-```bash
-node dist/index.js --check
-```
-
----
-
-## 5. Cấu hình để chạy local với Claude
-
-### 5a. Claude Desktop
-
-Mở file config:
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-Thêm:
-
-```json
-{
-  "mcpServers": {
-    "gdrive": {
-      "command": "node",
-      "args": ["/duong/dan/tuyet/doi/toi/mcp-gdrive/dist/index.js"],
-      "env": {
-        "GOOGLE_CLIENT_ID": "xxxxxxxxxxxx.apps.googleusercontent.com",
-        "GOOGLE_CLIENT_SECRET": "GOCSPX-xxxxxxxxxxxxxxxx"
-      }
-    }
-  }
-}
-```
-
-> `args` phải là **đường dẫn tuyệt đối**. Trên Windows dùng dấu `\\`, ví dụ `"C:\\Users\\ban\\mcp-gdrive\\dist\\index.js"`.
-> Nếu đã có `.env` cạnh project thì có thể bỏ hẳn khối `env`.
-
-Khởi động lại Claude Desktop → biểu tượng công cụ sẽ hiện 4 tool `gdrive_*`.
-
-### 5b. Claude Code (CLI)
-
-```bash
-claude mcp add gdrive -- node /duong/dan/tuyet/doi/toi/mcp-gdrive/dist/index.js
-```
-
-hoặc thêm vào `.mcp.json` trong repo của bạn:
-
-```json
-{
-  "mcpServers": {
-    "gdrive": {
-      "command": "node",
-      "args": ["/duong/dan/tuyet/doi/toi/mcp-gdrive/dist/index.js"]
-    }
-  }
-}
-```
-
-### 5c. Test bằng MCP Inspector (không cần Claude)
-
-```bash
-npm run inspector
-```
-
-Mở URL in ra terminal → tab **Tools** → thử từng tool.
-
----
-
-## 6. Biến môi trường
-
-| Biến | Bắt buộc | Mặc định | Ý nghĩa |
-|---|---|---|---|
-| `GOOGLE_CLIENT_ID` | ✅ | — | OAuth client ID (Desktop app) |
-| `GOOGLE_CLIENT_SECRET` | ✅ | — | OAuth client secret |
-| `GDRIVE_TOKEN_PATH` | | `~/.mcp-gdrive/token.json` | Nơi lưu refresh token |
-| `GDRIVE_OAUTH_PORT` | | `0` (tự chọn) | Cổng loopback cho OAuth callback |
-| `GDRIVE_SCOPES` | | `.../auth/drive` | Đổi thành `.../auth/drive.readonly` nếu chỉ cần đọc |
-| `GDRIVE_ROOT_FOLDER_ID` | | — | Giới hạn search/create trong một cây folder |
-| `GDRIVE_READ_ONLY` | | `false` | `true` = chặn `create`/`update` ở tầng server |
-| `GDRIVE_MAX_READ_BYTES` | | `1000000` | Giới hạn byte trả về mỗi lần `gdrive_read` |
-
-Biến đặt trong config MCP (`env`) **ưu tiên cao hơn** file `.env`.
-
----
-
-## 7. Tham chiếu tool
-
-### `gdrive_search`
+#### `gdrive_search`
 
 | Tham số | Kiểu | Mô tả |
 |---|---|---|
@@ -180,7 +178,7 @@ Biến đặt trong config MCP (`env`) **ưu tiên cao hơn** file `.env`.
 
 Ví dụ: *"tìm các Google Doc có chữ 'báo cáo quý 3' sửa sau 01/07/2026"*
 
-### `gdrive_read`
+#### `gdrive_read`
 
 | Tham số | Kiểu | Mô tả |
 |---|---|---|
@@ -196,7 +194,7 @@ Hành vi:
 - **Google Docs/Sheets/Slides** → export sang text (Docs→Markdown, có fallback `text/plain`).
 - **Ảnh** ≤ 5 MB → trả về dạng image block để model xem được.
 
-### `gdrive_create`
+#### `gdrive_create`
 
 | Tham số | Kiểu | Mô tả |
 |---|---|---|
@@ -208,7 +206,7 @@ Hành vi:
 | `content_base64` | string | Upload nhị phân (ảnh, PDF…) |
 | `description` | string | Mô tả |
 
-### `gdrive_update`
+#### `gdrive_update`
 
 | Tham số | Kiểu | Mô tả |
 |---|---|---|
@@ -228,54 +226,28 @@ Hành vi:
 
 ---
 
-## 8. Cấu trúc mã nguồn
-
-```
-mcp-gdrive/
-├── package.json
-├── tsconfig.json
-├── .env.example
-├── README.md
-└── src/
-    ├── index.ts            # Điểm vào: khởi tạo McpServer + StdioServerTransport
-    ├── config.ts           # Nạp .env thủ công, gom toàn bộ cấu hình
-    ├── auth.ts             # OAuth Desktop + PKCE, loopback server, đọc/ghi token, auto-refresh
-    ├── drive.ts            # Drive client, MIME map, normalize URL→ID, format lỗi
-    ├── scripts/
-    │   └── authorize.ts    # `npm run auth`
-    └── tools/
-        ├── common.ts       # Kiểu ToolResult, safeHandler, download/export helper
-        ├── search.ts       # gdrive_search
-        ├── read.ts         # gdrive_read
-        ├── create.ts       # gdrive_create
-        └── update.ts       # gdrive_update
-```
-
-**Nguyên tắc quan trọng:** MCP dùng **stdout** cho JSON-RPC, nên mọi log của server đều ghi ra **stderr** (hàm `log()` trong `auth.ts`). Đừng bao giờ `console.log()` trong luồng server.
-
 ---
 
-## 9. Xử lý sự cố
+## 7. Xử lý sự cố
 
-| Triệu chứng | Nguyên nhân & cách xử lý |
+| Triệu chứng | Nguyên nhân và cách xử lý |
 |---|---|
-| `Chưa đăng nhập Google Drive` | Chạy `npm run auth` |
-| `401 Token hết hiệu lực` | Refresh token bị thu hồi hoặc app còn ở chế độ Testing (hết hạn sau 7 ngày) → `npm run auth -- --force`, hoặc Publish app |
-| `403 insufficientPermissions` | Scope trong `.env` quá hẹp → đặt lại `GDRIVE_SCOPES` rồi `npm run auth -- --force` |
-| `404 File not found` | File không thuộc/chưa được share với tài khoản đang đăng nhập; hoặc scope là `drive.file` (chỉ thấy file do app tạo) |
-| Google không trả `refresh_token` | Vào <https://myaccount.google.com/permissions>, gỡ quyền của app rồi chạy lại `npm run auth` |
-| Claude Desktop không thấy server | Kiểm tra đường dẫn tuyệt đối trong config, đã `npm run build` chưa, và xem log: macOS `~/Library/Logs/Claude/mcp*.log` |
-| `Error: Cannot find module` | Chạy `npm install && npm run build` |
-| Tạo Google Doc từ Markdown bị lỗi | Server tự lùi về `text/plain` — nội dung vẫn vào Doc nhưng mất định dạng |
+| `API has not been used in project X` với gcp/firebase | API chưa bật trên project X: `gcp_enable_apis project_id=X`. Secret Manager cần project có billing |
+| `gcloud … scope is required but not consented` | Ở trang đăng nhập Google chưa tick ô *Google Cloud data*: chạy lại và bấm *Select all* |
+| `iam.disableServiceAccountKeyCreation` | Tổ chức cấm tạo key. Dùng Workload Identity / ADC, hoặc nhờ admin tắt policy cho project |
+| `firebase_auth_*` báo 404 / `CONFIGURATION_NOT_FOUND` | Project chưa khởi tạo Authentication. Mở Firebase Console → Authentication → Get started một lần |
+| `plist` iOS thiếu `CLIENT_ID` | Bật Google Sign-In trước, rồi tải lại config |
+| Cloudflare `Authentication error` | Token thiếu quyền cho zone/tính năng đó (VD Tunnel trên zone của account khác) |
+| GitHub 404 khi đặt secret | Token không có quyền repo, hoặc environment chưa tồn tại |
+| Apple 401 `NOT_AUTHORIZED` | Sai `ASC_KEY_ID`/`ASC_ISSUER_ID`/file `.p8`, hoặc đồng hồ máy lệch |
+| Drive `Chưa đăng nhập` / `401` | `npm run auth` (hoặc `-- --force`). App ở chế độ Testing thì refresh token hết hạn sau 7 ngày |
+| Claude không thấy tool | Đường dẫn trong config phải tuyệt đối, đã `npm run build` chưa, `MCP_PROVIDERS` có loại provider đó không |
 
----
+## 8. Bảo mật
 
-## 10. Bảo mật
-
-- `token.json` chứa refresh token = quyền truy cập Drive của bạn. File được ghi với quyền `0600` và **đã nằm trong `.gitignore`** — đừng commit.
-- `.env` chứa client secret — cũng đã được gitignore.
-- Muốn an toàn hơn: đặt `GDRIVE_SCOPES=https://www.googleapis.com/auth/drive.readonly`, hoặc `GDRIVE_READ_ONLY=true`, hoặc giới hạn `GDRIVE_ROOT_FOLDER_ID` vào đúng một folder.
-- Thu hồi quyền bất cứ lúc nào tại <https://myaccount.google.com/permissions>.
+- `.env`, `token.json`, `credentials.json` đã nằm trong `.gitignore`. File do tool ghi ra được tạo với quyền `0600`.
+- Ưu tiên `from_file` trong `secret_store` / `github_set_secret` để giá trị bí mật không đi qua hội thoại.
+- Token GitHub/Cloudflare nên có phạm vi hẹp nhất có thể. Có thể đặt `MCP_READ_ONLY=true` khi chỉ cần tra cứu.
 
 ---
 

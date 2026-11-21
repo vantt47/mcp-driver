@@ -8,10 +8,8 @@ import { Config, assertOAuthCredentials } from "./config.js";
 
 const CALLBACK_PATH = "/oauth2callback";
 
-/** Ghi log ra stderr — stdout được dành riêng cho giao thức MCP (JSON-RPC). */
-export function log(...args: unknown[]): void {
-  console.error("[mcp-gdrive]", ...args);
-}
+import { log } from "../../core/result.js";
+export { log };
 
 function redirectUri(port: number): string {
   return `http://localhost:${port}${CALLBACK_PATH}`;

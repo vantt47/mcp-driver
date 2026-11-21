@@ -5,8 +5,8 @@
  * vào GDRIVE_TOKEN_PATH (mặc định ~/.mcp-gdrive/token.json).
  */
 import { google } from "googleapis";
-import { loadConfig, assertOAuthCredentials } from "../config.js";
-import { runInteractiveAuth, readToken, getAuthenticatedClient } from "../auth.js";
+import { loadConfig, assertOAuthCredentials } from "./config.js";
+import { runInteractiveAuth, readToken, getAuthenticatedClient } from "./auth.js";
 
 async function main() {
   const config = loadConfig();

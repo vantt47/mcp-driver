@@ -1,11 +1,12 @@
 {
-  "name": "mcp-gdrive",
-  "version": "1.0.0",
-  "description": "MCP server for Google Drive — search / read / create / update",
+  "name": "mcp-platform",
+  "version": "2.0.0",
+  "description": "MCP server setup key/config đa nền tảng: Google Cloud, Firebase, Cloudflare, GitHub, Apple, Google Drive",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
+    "mcp-platform": "dist/index.js",
     "mcp-gdrive": "dist/index.js"
   },
   "files": [
@@ -16,19 +17,21 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "auth": "npm run build && node dist/scripts/authorize.js",
+    "auth": "npm run build && node dist/providers/gdrive/authorize.js",
     "start": "node dist/index.js",
     "dev": "npm run build && node dist/index.js",
     "inspector": "npm run build && npx -y @modelcontextprotocol/inspector node dist/index.js",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "check": "npm run build && node dist/index.js --check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "google-auth-library": "^10.5.0",
     "googleapis": "^178.0.0",
+    "libsodium-wrappers": "^0.7.15",
     "open": "^10.1.0",
     "zod": "^3.25.76"
   },
@@ -36,6 +39,7 @@
     "google-auth-library": "$google-auth-library"
   },
   "devDependencies": {
+    "@types/libsodium-wrappers": "^0.7.14",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   }
