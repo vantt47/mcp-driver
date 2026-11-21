@@ -1,42 +1,59 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig } from "./config.js";
-import { log, runInteractiveAuth, readToken } from "./auth.js";
-import { getDrive } from "./drive.js";
-import type { ToolContext } from "./tools/common.js";
-import { registerSearchTool } from "./tools/search.js";
-import { registerReadTool } from "./tools/read.js";
-import { registerCreateTool } from "./tools/create.js";
-import { registerUpdateTool } from "./tools/update.js";
+import { globalReadOnly } from "./core/env.js";
+import { log } from "./core/result.js";
+import type { Provider } from "./core/provider.js";
+import { gdriveProvider } from "./providers/gdrive/index.js";
+import { gcpProvider } from "./providers/gcp/index.js";
+import { firebaseProvider } from "./providers/firebase/index.js";
+import { cloudflareProvider } from "./providers/cloudflare/index.js";
+import { githubProvider } from "./providers/github/index.js";
+import { appleProvider } from "./providers/apple/index.js";
+import { platformProvider } from "./providers/platform/index.js";
+import { loadConfig as loadDriveConfig } from "./providers/gdrive/config.js";
+import { runInteractiveAuth } from "./providers/gdrive/auth.js";
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
+
+const ALL: Provider[] = [
+  gcpProvider,
+  firebaseProvider,
+  cloudflareProvider,
+  githubProvider,
+  appleProvider,
+  gdriveProvider,
+];
+
+/** MCP_PROVIDERS=gcp,firebase,github (mặc định: tất cả). "platform" luôn bật. */
+export function enabledProviders(): Provider[] {
+  const raw = (process.env.MCP_PROVIDERS ?? "all").trim().toLowerCase();
+  if (!raw || raw === "all" || raw === "*") return ALL;
+  const wanted = new Set(raw.split(/[\s,]+/).filter(Boolean));
+  const unknown = [...wanted].filter((id) => !ALL.some((p) => p.id === id) && id !== "platform");
+  if (unknown.length) log(`Bỏ qua provider không tồn tại: ${unknown.join(", ")}`);
+  return ALL.filter((p) => wanted.has(p.id));
+}
 
 export function createServer(): McpServer {
-  const config = loadConfig();
+  const providers = enabledProviders();
+  const platform = platformProvider(() => providers);
+  const all = [platform, ...providers];
 
   const server = new McpServer(
-    { name: "mcp-gdrive", version: VERSION },
+    { name: "mcp-platform", version: VERSION },
     {
-      instructions:
-        "Server này thao tác với Google Drive của người dùng.\n" +
-        "Quy trình thường dùng: gdrive_search để tìm fileId → gdrive_read để xem nội dung → " +
-        "gdrive_create để tạo mới hoặc gdrive_update để sửa.\n" +
-        "Luôn dùng fileId trả về từ gdrive_search thay vì đoán. " +
-        "Trước khi ghi đè (gdrive_update mode=replace) hoặc chuyển file vào Thùng rác, hãy xác nhận lại với người dùng.",
+      instructions: [
+        "Server MCP gom nhiều nền tảng để setup key/config cho dự án: Google Cloud, Firebase, Cloudflare, GitHub, Apple, Google Drive.",
+        "Khi người dùng làm tính năng Google Sign-In, push FCM, Sign in with Apple…: gọi platform_setup_guide trước, rồi làm theo các bước.",
+        "Bí mật (key, client secret, service-account JSON) chỉ được ghi vào destinations — không in ra chat.",
+        "Trước thao tác ghi đè/xoá (DNS, file, secret đã tồn tại) phải xác nhận với người dùng.",
+        ...all.map((p) => `- ${p.instructions}`),
+      ].join("\n"),
     },
   );
 
-  const ctx: ToolContext = {
-    config,
-    drive: () => getDrive(config),
-  };
-
-  registerSearchTool(server, ctx);
-  registerReadTool(server, ctx);
-  registerCreateTool(server, ctx);
-  registerUpdateTool(server, ctx);
-
+  for (const p of all) p.register(server);
   return server;
 }
 
@@ -51,46 +68,38 @@ async function main(): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(
       [
-        "mcp-gdrive — MCP server cho Google Drive",
+        "mcp-platform — MCP server setup key/config đa nền tảng",
         "",
         "Cách dùng:",
-        "  mcp-gdrive            Chạy MCP server qua stdio (dùng bởi Claude Desktop/Code)",
-        "  mcp-gdrive --auth     Mở trình duyệt để đăng nhập Google và lưu refresh token",
-        "  mcp-gdrive --check    Kiểm tra cấu hình & trạng thái đăng nhập",
+        "  mcp-platform            Chạy MCP server qua stdio",
+        "  mcp-platform --check    Kiểm tra credential của từng provider",
+        "  mcp-platform --auth     Đăng nhập Google Drive (OAuth) và lưu refresh token",
         "",
-        "Tools: gdrive_search, gdrive_read, gdrive_create, gdrive_update",
+        `Providers: ${ALL.map((p) => p.id).join(", ")} (chọn bằng MCP_PROVIDERS)`,
       ].join("\n"),
     );
     return;
   }
 
   if (argv.includes("--auth")) {
-    const config = loadConfig();
+    const config = loadDriveConfig();
     await runInteractiveAuth(config);
     log(`Xong. Token đã lưu tại ${config.tokenPath}`);
     return;
   }
 
   if (argv.includes("--check")) {
-    const config = loadConfig();
-    const token = readToken(config.tokenPath);
-    console.log(
-      [
-        `Client ID    : ${config.clientId ? config.clientId.slice(0, 18) + "…" : "❌ CHƯA ĐẶT"}`,
-        `Client Secret: ${config.clientSecret ? "✓ đã đặt" : "❌ CHƯA ĐẶT"}`,
-        `Token path   : ${config.tokenPath} ${token ? "✓ đã đăng nhập" : "❌ chưa đăng nhập (chạy: npm run auth)"}`,
-        `Scopes       : ${config.scopes.join(" ")}`,
-        `Root folder  : ${config.rootFolderId ?? "(toàn bộ Drive)"}`,
-        `Read-only    : ${config.readOnly}`,
-      ].join("\n"),
-    );
+    for (const p of enabledProviders()) {
+      const s = await p.status();
+      console.log(`${s.configured ? "✅" : "⚠️ "} ${p.id.padEnd(10)} ${s.detail}`);
+    }
+    if (globalReadOnly()) console.log("🔒 MCP_READ_ONLY=true");
     return;
   }
 
   const server = createServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  log(`mcp-gdrive v${VERSION} đã sẵn sàng (stdio).`);
+  await server.connect(new StdioServerTransport());
+  log(`mcp-platform v${VERSION} sẵn sàng (stdio) — providers: ${enabledProviders().map((p) => p.id).join(", ")}`);
 }
 
 main().catch((err) => {
