@@ -2,18 +2,20 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Provider } from "../../core/provider.js";
 import { loadConfig } from "./config.js";
 import { readToken } from "./auth.js";
-import { getDrive } from "./drive.js";
+import { getDrive, getSheets } from "./drive.js";
 import type { ToolContext } from "./tools/common.js";
 import { registerSearchTool } from "./tools/search.js";
 import { registerReadTool } from "./tools/read.js";
 import { registerCreateTool } from "./tools/create.js";
 import { registerUpdateTool } from "./tools/update.js";
+import { registerSheetTools } from "./tools/sheets.js";
 
 export const gdriveProvider: Provider = {
   id: "gdrive",
   title: "Google Drive",
   instructions:
     "gdrive_*: Google Drive của người dùng. gdrive_search lấy fileId → gdrive_read → gdrive_create / gdrive_update. " +
+    "Google Sheets theo ô: gsheet_info (xem tab/gid) → gsheet_read → gsheet_update / gsheet_append / gsheet_insert_rows; KHÔNG dùng gdrive_update để sửa Sheet (ghi đè cả file). " +
     "Xác nhận với người dùng trước khi ghi đè (mode=replace) hoặc chuyển file vào Thùng rác.",
   status() {
     const config = loadConfig();
@@ -26,10 +28,11 @@ export const gdriveProvider: Provider = {
   },
   register(server: McpServer) {
     const config = loadConfig();
-    const ctx: ToolContext = { config, drive: () => getDrive(config) };
+    const ctx: ToolContext = { config, drive: () => getDrive(config), sheets: () => getSheets(config) };
     registerSearchTool(server, ctx);
     registerReadTool(server, ctx);
     registerCreateTool(server, ctx);
     registerUpdateTool(server, ctx);
+    registerSheetTools(server, ctx);
   },
 };

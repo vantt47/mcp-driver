@@ -1,20 +1,30 @@
-import { google, drive_v3 } from "googleapis";
+import { google, drive_v3, sheets_v4 } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
 import { Config } from "./config.js";
 import { getAuthenticatedClient } from "./auth.js";
 
 export type Drive = drive_v3.Drive;
 export type DriveFile = drive_v3.Schema$File;
+export type Sheets = sheets_v4.Sheets;
 
 let cachedAuth: OAuth2Client | null = null;
 let cachedDrive: Drive | null = null;
+let cachedSheets: Sheets | null = null;
+
+function getAuth(config: Config): OAuth2Client {
+  if (!cachedAuth) cachedAuth = getAuthenticatedClient(config);
+  return cachedAuth;
+}
 
 export function getDrive(config: Config): Drive {
-  if (!cachedDrive) {
-    cachedAuth = getAuthenticatedClient(config);
-    cachedDrive = google.drive({ version: "v3", auth: cachedAuth });
-  }
+  if (!cachedDrive) cachedDrive = google.drive({ version: "v3", auth: getAuth(config) });
   return cachedDrive;
+}
+
+/** Sheets API dùng chung token OAuth của Drive (scope `drive` đã bao gồm Sheets). */
+export function getSheets(config: Config): Sheets {
+  if (!cachedSheets) cachedSheets = google.sheets({ version: "v4", auth: getAuth(config) });
+  return cachedSheets;
 }
 
 export const FILE_FIELDS =
