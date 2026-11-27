@@ -2,12 +2,14 @@ import { Readable } from "node:stream";
 import { Config } from "../config.js";
 import { assertWritable as assertGlobalWritable } from "../../../core/env.js";
 import { ToolResult, safeHandler as coreSafeHandler, textResult } from "../../../core/result.js";
-import { Drive, DriveFile, FILE_FIELDS, explainDriveError, normalizeFileId } from "../drive.js";
+import { Drive, DriveFile, Sheets, FILE_FIELDS, explainDriveError, normalizeFileId } from "../drive.js";
 
 export interface ToolContext {
   config: Config;
   /** Lazy: chỉ khởi tạo Drive client khi tool thực sự được gọi. */
   drive: () => Drive;
+  /** Lazy: Sheets API client (dùng chung token Drive). */
+  sheets: () => Sheets;
 }
 
 export type { ToolResult };

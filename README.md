@@ -10,7 +10,7 @@ MCP server (TypeScript / Node.js) để Claude tự setup key và config khi là
 | `cloudflare` | `cf_list_zones`, `cf_list_dns`, `cf_upsert_dns`, `cf_delete_dns`, `cf_list_tunnels` | DNS và Tunnel (mặc định không ghi đè record đã có) |
 | `github` | `github_list_secrets`, `github_set_secret`, `github_set_variable` | Secret và variable của GitHub Actions (repo hoặc environment) |
 | `apple` | `apple_list_bundle_ids`, `apple_create_bundle_id`, `apple_bundle_capabilities` | App ID, bật Push Notifications, Sign in with Apple… |
-| `gdrive` | `gdrive_search`, `gdrive_read`, `gdrive_create`, `gdrive_update` | Google Drive (giữ nguyên như bản cũ) |
+| `gdrive` | `gdrive_search`, `gdrive_read`, `gdrive_create`, `gdrive_update`, `gsheet_info`, `gsheet_read`, `gsheet_update`, `gsheet_append`, `gsheet_insert_rows`, `gsheet_duplicate_tab` | Google Drive và Google Sheets theo từng ô (đọc/ghi vùng, chèn dòng, nhân bản tab) |
 
 ### Nguyên tắc an toàn
 
@@ -113,14 +113,14 @@ src/
     ├── cloudflare/          # cf_*
     ├── github/              # client (mã hoá sealed box bằng libsodium), github_*
     ├── apple/               # JWT ES256 + App Store Connect, apple_*
-    └── gdrive/              # Code Drive cũ: auth OAuth PKCE, tools/, authorize.ts
+    └── gdrive/              # Drive + Sheets: auth OAuth PKCE, tools/ (gdrive_*, sheets.ts → gsheet_*), authorize.ts
 ```
 
 Thêm provider mới: tạo `src/providers/<id>/index.ts` export một `Provider` (`id`, `title`, `instructions`, `status()`, `register(server)`), rồi thêm vào mảng `ALL` trong `src/index.ts`.
 
 MCP dùng **stdout** cho JSON-RPC, nên mọi log phải ghi ra **stderr** (dùng `log()` trong `core/result.ts`). Không dùng `console.log()` trong luồng server.
 
-## 6. Provider Google Drive
+## 6. Provider Google Drive / Google Sheets
 
 ### Tạo OAuth Client (Desktop app)
 
@@ -223,6 +223,38 @@ Hành vi:
 | `starred` | boolean | Gắn/bỏ sao |
 
 > `append`/`prepend` sẽ tải nội dung hiện tại về, ghép chuỗi, rồi upload lại toàn bộ.
+
+> ⚠️ Không dùng `gdrive_update` để sửa Google Sheet: nó ghi đè **cả file** (mất các tab khác, công thức, định dạng). Dùng các tool `gsheet_*` bên dưới.
+
+### Google Sheets theo từng ô (`gsheet_*`)
+
+Dùng Sheets API v4 với **cùng token OAuth** của Drive (scope `drive` đã đủ, không cần đăng nhập lại). Chỉ sửa đúng các ô/dòng được chỉ định; tab khác, công thức, định dạng, dropdown giữ nguyên. Các tool ghi tôn trọng `GDRIVE_READ_ONLY` / `MCP_READ_ONLY`.
+
+Tham số chung:
+
+| Tham số | Kiểu | Mô tả |
+|---|---|---|
+| `spreadsheet` | string ✅ | Spreadsheet ID hoặc URL `docs.google.com/spreadsheets/d/<ID>/edit#gid=<gid>`. `gid` trong URL dùng để chọn tab |
+| `tab` | string | Tên tab (bỏ qua nếu `range` đã có `'Tab'!…`) |
+| `gid` | number | sheetId của tab. Thứ tự ưu tiên: range có tên tab → `tab` → `gid` → gid trong URL → tab đầu tiên |
+
+| Tool | Tham số riêng | Làm gì |
+|---|---|---|
+| `gsheet_info` | — | Liệt kê tab: tên, gid, số dòng × cột |
+| `gsheet_read` | `range` (A1, bỏ trống = cả tab), `render` (`FORMATTED_VALUE` \| `UNFORMATTED_VALUE` \| `FORMULA`) | Đọc vùng ô, in kèm số dòng và chữ cột |
+| `gsheet_update` | `range` ✅, `values` ✅ (mảng 2 chiều; `null` = giữ ô, `""` = xoá ô), `input_option` (`USER_ENTERED` mặc định \| `RAW`) | Ghi giá trị vào đúng vùng ô |
+| `gsheet_append` | `range`, `values` ✅, `input_option` | Chèn dòng sau dòng dữ liệu cuối của bảng (không ghi đè) |
+| `gsheet_insert_rows` | `before_row` ✅ (1-based), `count` | Chèn dòng trống, kế thừa định dạng dòng trên |
+| `gsheet_duplicate_tab` | `new_title` ✅, `index` | Nhân bản tab (giá trị + công thức + định dạng) |
+
+Quy trình thêm một dòng vào giữa bảng (ví dụ ngay dưới một nhóm, trên dòng tổng):
+
+```text
+gsheet_info   spreadsheet=<URL>                       → biết tên tab / gid
+gsheet_read   spreadsheet=<URL> range=A1:T60          → tìm dòng cần chèn (ví dụ 36)
+gsheet_insert_rows  spreadsheet=<URL> before_row=36
+gsheet_update spreadsheet=<URL> range=B36:F36 values=[["Dự án mới", null, null, null, "Văn"]]
+```
 
 ---
 
